@@ -1,21 +1,20 @@
 import os
 import asyncio
-from datetime import datetime
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from supabase import create_client
 
-# Telegram credentials
-api_id = int(os.getenv("TG_API_ID"))
-api_hash = os.getenv("TG_API_HASH")
-session_string = os.getenv("TG_SESSION_STRING")
+# Telegram
+TG_API_ID = int(os.environ["TG_API_ID"])
+TG_API_HASH = os.environ["TG_API_HASH"]
+TG_SESSION_STRING = os.environ["TG_SESSION_STRING"]
 
-# Supabase credentials
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase = create_client(supabase_url, supabase_key)
+# Supabase
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-channels = [
+CHANNELS = [
     "magellan_geo",
     "ege100_geo",
     "magellan_oge",
@@ -25,43 +24,46 @@ channels = [
     "zalivgeografa",
     "geotask",
     "cartetika_channel",
-    "URBAN_MASH"
+    "URBAN_MASH",
 ]
 
 async def main():
-    async with TelegramClient(StringSession(session_string), api_id, api_hash) as client:
-        for channel in channels:
+    async with TelegramClient(StringSession(TG_SESSION_STRING), TG_API_ID, TG_API_HASH) as client:
+        for channel in CHANNELS:
             print(f"\n--- {channel} ---")
 
-            async for message in client.iter_messages(channel, limit=5):
-                if not message.text:
+            async for msg in client.iter_messages(channel, limit=10):
+                if not msg.message:
                     continue
 
-                external_id = f"{channel}:{message.id}"
+                external_id = f"{channel}:{msg.id}"
 
-                # Проверяем, есть ли уже такой пост
-                existing = supabase.table("content_ai.raw_items") \
-                    .select("id") \
-                    .eq("external_id", external_id) \
-                    .execute()
-
-                if existing.data:
+                # ✅ ВАЖНО: используем schema("content_ai")
+                exists = (
+                    sb.schema("content_ai")
+                      .table("raw_items")
+                      .select("id")
+                      .eq("platform", "telegram")
+                      .eq("external_id", external_id)
+                      .limit(1)
+                      .execute()
+                )
+                if exists.data:
                     continue
 
-                data = {
-                    "source_id": None,  # позже свяжем с sources
+                row = {
+                    "source_id": None,  # MVP: можно null
                     "platform": "telegram",
                     "external_id": external_id,
-                    "url": f"https://t.me/{channel}/{message.id}",
-                    "text": message.text,
-                    "published_at": message.date.isoformat(),
-                    "views": message.views,
+                    "url": f"https://t.me/{channel}/{msg.id}",
+                    "text": msg.message,
+                    "published_at": msg.date.isoformat(),
+                    "views": msg.views,
                     "reactions": None,
-                    "comments": None
+                    "comments": None,
                 }
 
-                supabase.table("content_ai.raw_items").insert(data).execute()
-
+                sb.schema("content_ai").table("raw_items").insert(row).execute()
                 print("Saved:", external_id)
 
 asyncio.run(main())
