@@ -11,6 +11,7 @@ load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DB_URL = os.getenv("SUPABASE_DB_URL")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY is missing.")
@@ -18,9 +19,6 @@ if not DB_URL:
     raise RuntimeError("SUPABASE_DB_URL is missing.")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-
 
 FETCH_QUERY = """
 select id, source, url, text, published_at, metrics
@@ -60,7 +58,6 @@ def fetch_items():
 
 
 def build_prompt(items):
-    # Чуть жёстче задаём структуру, чтобы digest был объектом
     schema_hint = {
         "top_topics": "array(5)",
         "what_is_growing": "array",
@@ -186,33 +183,34 @@ def render_markdown(result):
 
 def save_digest(result_json, digest_md, items_count):
     """
-    В digest_runs стоит уникальность по kind, поэтому мы делаем UPSERT:
-    - если kind='daily' уже есть -> обновляем запись
-    - если нет -> вставляем
+    Таблица content_ai.digest_runs:
+      - kind NOT NULL, CHECK kind in ('daily','weekly')
+      - UNIQUE(kind)
+    Значит: одна строка на kind -> UPSERT по kind.
+    last_sent_at/created_at/id не трогаем вручную.
     """
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
 
-    upsert_query = """
+    query = """
     insert into content_ai.digest_runs
-      (kind, run_date, time_window, items_count, model, result_json, digest_md, last_sent_at)
+        (kind, run_date, items_count, model, result_json, digest_md)
     values
-      (%s, %s, interval '24 hours', %s, %s, %s, %s, last_sent_at)
-    on conflict (kind) do update
-    set
-      run_date = excluded.run_date,
-      time_window = excluded.time_window,
-      items_count = excluded.items_count,
-      model = excluded.model,
-      result_json = excluded.result_json,
-      digest_md = excluded.digest_md,
-      created_at = now();
+        (%s, %s, %s, %s, %s, %s)
+    on conflict (kind)
+    do update set
+        run_date     = excluded.run_date,
+        items_count  = excluded.items_count,
+        model        = excluded.model,
+        result_json  = excluded.result_json,
+        digest_md    = excluded.digest_md,
+        created_at   = now();
     """
 
     cur.execute(
-        upsert_query,
+        query,
         (
-            "daily",  # разрешено constraint'ом: daily/weekly
+            "daily",
             date.today(),
             items_count,
             MODEL,
