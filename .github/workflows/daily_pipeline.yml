@@ -28,7 +28,9 @@ jobs:
       # 1️⃣ Collect Telegram
       # -----------------------
       - name: Collect Telegram posts
-        run: python scripts/collect_telegram.py
+        run: 
+          cd $GITHUB_WORKSPACE
+          python scripts/collect_telegram.py
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
@@ -40,7 +42,9 @@ jobs:
       # 2️⃣ Process with AI
       # -----------------------
       - name: Process raw posts
-        run: python scripts/process_raw.py
+        run: run: |
+          cd $GITHUB_WORKSPACE
+          python scripts/process_raw.py
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -50,7 +54,9 @@ jobs:
       # 3️⃣ Generate Daily Report
       # -----------------------
       - name: Generate daily report
-        run: python scripts/generate_daily_report.py
+        run: 
+          cd $GITHUB_WORKSPACE
+          python scripts/generate_daily_report.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -62,6 +68,7 @@ jobs:
         run: |
           REPORT_FILE=$(ls reports/*_daily.md | tail -n 1)
           echo "Using report: $REPORT_FILE"
+          cd $GITHUB_WORKSPACE
           python scripts/send_report_to_telegram.py
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
