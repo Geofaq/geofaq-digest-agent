@@ -63,7 +63,7 @@ def build_prompt(items):
 }}
 
 Вот данные:
-{json.dumps(items, ensure_ascii=False)}
+json.dumps(items, ensure_ascii=False, default=str)
 """
 
 
