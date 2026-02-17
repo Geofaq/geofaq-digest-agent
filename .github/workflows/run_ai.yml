@@ -1,9 +1,9 @@
 name: Run AI Digest
 
 on:
-  workflow_dispatch:        # запуск вручную
+  workflow_dispatch:
   schedule:
-    - cron: "0 21 * * *"    # каждый день в 21:00 UTC (можем изменить)
+    - cron: "0 21 * * *"   # каждый день 21:00 UTC (в Сербии это обычно 22:00/23:00)
 
 jobs:
   run-ai:
@@ -16,18 +16,18 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
       - name: Install dependencies
         run: |
-          pip install "openai>=1.40.0" psycopg2-binary python-dotenv
+          pip install "openai>=1.0.0" psycopg2-binary python-dotenv
 
       - name: Show installed versions
         run: |
-          python -c "import openai, psycopg2; print('openai:', openai.__version__); print('psycopg2:', psycopg2.__version__)"
+          python -c "import openai; print('openai:', getattr(openai,'__version__','(no __version__)'))"
 
       - name: Run AI processing
         env:
