@@ -45,8 +45,9 @@ def fetch_items():
     for row in rows:
         item = dict(zip(cols, row))
 
-        if hasattr(item.get("published_at"), "isoformat"):
-            item["published_at"] = item["published_at"].isoformat()
+        pa = item.get("published_at")
+        if hasattr(pa, "isoformat"):
+            item["published_at"] = pa.isoformat()
 
         if item.get("metrics") is None:
             item["metrics"] = {}
@@ -59,30 +60,44 @@ def fetch_items():
 
 
 def build_prompt(items):
+    # Явно фиксируем схему, чтобы digest был объектом, а не строкой
+    schema = {
+        "top_topics": "array(5)",
+        "what_is_growing": "array",
+        "geofaq_ideas": "array",
+        "digest": {
+            "title": "string",
+            "bullets": "array(string)",
+            "links": "array({title,url})"
+        }
+    }
+
     return (
         "Ты аналитик GeoFAQ.\n"
         "На основе списка материалов за сутки сформируй:\n"
-        "1) 5 тем дня (top_topics)\n"
-        "2) что растёт (what_is_growing)\n"
-        "3) идеи для GeoFAQ (geofaq_ideas)\n"
-        "4) короткий дайджест (digest)\n\n"
-        "Верни строго валидный JSON. Без markdown.\n\n"
-        f"Дата: {datetime.now(timezone.utc).date().isoformat()}\n\n"
+        "1) top_topics — РОВНО 5 тем дня\n"
+        "2) what_is_growing — сигналы роста/всплески\n"
+        "3) geofaq_ideas — идеи для контента GeoFAQ\n"
+        "4) digest — объект с title/bullets/links\n\n"
+        "Верни строго валидный JSON. Без markdown. Без ```.\n"
+        "digest ОБЯЗАТЕЛЬНО должен быть объектом, не строкой.\n\n"
+        f"Схема:\n{json.dumps(schema, ensure_ascii=False)}\n\n"
+        f"Дата (UTC): {datetime.now(timezone.utc).date().isoformat()}\n\n"
         f"Items:\n{json.dumps(items, ensure_ascii=False, default=str)}"
     )
 
 
-def clean_json(text):
+def clean_json(text: str) -> str:
     text = text.strip()
-    text = re.sub(r"^```(?:json)?", "", text)
-    text = re.sub(r"```$", "", text)
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
 
-def repair_json(bad_text):
+def repair_json(bad_text: str) -> dict:
     repair_prompt = (
-        "Исправь текст так, чтобы он стал валидным JSON. "
-        "Верни только JSON.\n\n"
+        "Исправь текст так, чтобы он стал валидным JSON и соответствовал схеме.\n"
+        "Верни только JSON, без markdown.\n\n"
         f"{bad_text}"
     )
 
@@ -114,27 +129,64 @@ def analyze_with_ai(items):
     text = clean_json(resp.choices[0].message.content)
 
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except json.JSONDecodeError:
-        return repair_json(text)
+        data = repair_json(text)
+
+    return data
+
+
+def ensure_list(x):
+    """Нормализуем к list."""
+    if x is None:
+        return []
+    if isinstance(x, list):
+        return x
+    # если строка — сделаем список из одного пункта
+    if isinstance(x, str):
+        return [x.strip()] if x.strip() else []
+    return []
 
 
 def render_markdown(result):
+    # result может быть dict, но делаем безопасно
+    if not isinstance(result, dict):
+        return "# GeoFAQ Digest\n\n- (Ошибка формата результата: не dict)\n"
+
     digest = result.get("digest", {})
-    title = digest.get("title", "GeoFAQ Digest")
-    bullets = digest.get("bullets", [])
-    links = digest.get("links", [])
+
+    # digest может быть строкой (как у тебя). Обрабатываем.
+    if isinstance(digest, str):
+        title = "GeoFAQ Digest"
+        bullets = [digest.strip()] if digest.strip() else []
+        links = []
+    elif isinstance(digest, dict):
+        title = digest.get("title") or "GeoFAQ Digest"
+        bullets = ensure_list(digest.get("bullets"))
+        links = ensure_list(digest.get("links"))
+    else:
+        title = "GeoFAQ Digest"
+        bullets = []
+        links = []
 
     md = f"# {title}\n\n"
+    if bullets:
+        for b in bullets:
+            md += f"- {b}\n"
+    else:
+        md += "- (Пустой дайджест)\n"
 
-    for b in bullets:
-        md += f"- {b}\n"
-
+    # links: ожидаем список dict({title,url}), но допускаем строки
     if links:
         md += "\n## Ссылки\n"
         for l in links:
             if isinstance(l, dict):
-                md += f"- {l.get('title','')}: {l.get('url','')}\n"
+                t = (l.get("title") or "link").strip()
+                u = (l.get("url") or "").strip()
+                if u:
+                    md += f"- {t}: {u}\n"
+            elif isinstance(l, str) and l.strip():
+                md += f"- {l.strip()}\n"
 
     return md
 
