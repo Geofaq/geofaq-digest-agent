@@ -60,14 +60,27 @@ def fetch_items():
 
 
 def build_prompt(items):
+    # Чуть жёстче задаём структуру, чтобы digest был объектом
+    schema_hint = {
+        "top_topics": "array(5)",
+        "what_is_growing": "array",
+        "geofaq_ideas": "array",
+        "digest": {
+            "title": "string",
+            "bullets": "array(string)",
+            "links": "array({title,url})"
+        }
+    }
+
     return (
         "Ты аналитик GeoFAQ.\n"
         "На основе списка материалов за сутки сформируй:\n"
-        "1) top_topics (РОВНО 5)\n"
-        "2) what_is_growing\n"
-        "3) geofaq_ideas\n"
-        "4) digest — объект с title, bullets (список), links (список объектов)\n\n"
-        "Верни строго валидный JSON. Без markdown. Без ```.\n\n"
+        "1) top_topics — РОВНО 5 тем дня\n"
+        "2) what_is_growing — сигналы роста\n"
+        "3) geofaq_ideas — идеи для GeoFAQ\n"
+        "4) digest — объект {title, bullets[], links[{title,url}]}\n\n"
+        "Верни строго валидный JSON. Без markdown. Без ```.\n"
+        f"Схема:\n{json.dumps(schema_hint, ensure_ascii=False)}\n\n"
         f"Дата (UTC): {datetime.now(timezone.utc).date().isoformat()}\n\n"
         f"Items:\n{json.dumps(items, ensure_ascii=False, default=str)}"
     )
@@ -82,8 +95,8 @@ def clean_json(text: str) -> str:
 
 def repair_json(bad_text: str) -> dict:
     repair_prompt = (
-        "Исправь текст так, чтобы он стал валидным JSON. "
-        "Верни только JSON.\n\n"
+        "Исправь текст так, чтобы он стал валидным JSON и соответствовал схеме.\n"
+        "Верни только JSON, без markdown.\n\n"
         f"{bad_text}"
     )
 
@@ -138,7 +151,7 @@ def render_markdown(result):
 
     if isinstance(digest, str):
         title = "GeoFAQ Digest"
-        bullets = [digest]
+        bullets = [digest.strip()] if digest.strip() else []
         links = []
     elif isinstance(digest, dict):
         title = digest.get("title") or "GeoFAQ Digest"
@@ -161,31 +174,45 @@ def render_markdown(result):
         md += "\n## Ссылки\n"
         for l in links:
             if isinstance(l, dict):
-                t = l.get("title", "")
-                u = l.get("url", "")
+                t = (l.get("title") or "link").strip()
+                u = (l.get("url") or "").strip()
                 if u:
                     md += f"- {t}: {u}\n"
-            elif isinstance(l, str):
-                md += f"- {l}\n"
+            elif isinstance(l, str) and l.strip():
+                md += f"- {l.strip()}\n"
 
     return md
 
 
 def save_digest(result_json, digest_md, items_count):
+    """
+    В digest_runs стоит уникальность по kind, поэтому мы делаем UPSERT:
+    - если kind='daily' уже есть -> обновляем запись
+    - если нет -> вставляем
+    """
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
 
-    insert_query = """
+    upsert_query = """
     insert into content_ai.digest_runs
-      (kind, run_date, time_window, items_count, model, result_json, digest_md)
+      (kind, run_date, time_window, items_count, model, result_json, digest_md, last_sent_at)
     values
-      (%s, %s, interval '24 hours', %s, %s, %s, %s);
+      (%s, %s, interval '24 hours', %s, %s, %s, %s, last_sent_at)
+    on conflict (kind) do update
+    set
+      run_date = excluded.run_date,
+      time_window = excluded.time_window,
+      items_count = excluded.items_count,
+      model = excluded.model,
+      result_json = excluded.result_json,
+      digest_md = excluded.digest_md,
+      created_at = now();
     """
 
     cur.execute(
-        insert_query,
+        upsert_query,
         (
-            "daily",          # допустимые: daily / weekly
+            "daily",  # разрешено constraint'ом: daily/weekly
             date.today(),
             items_count,
             MODEL,
