@@ -1,6 +1,6 @@
 requests
 telethon
 supabase
-openai
+openai>=1.40.0
 psycopg2-binary
 python-dotenv
