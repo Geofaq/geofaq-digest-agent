@@ -21,7 +21,6 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
-
 FETCH_QUERY = """
 select id, source, url, text, published_at, metrics
 from content_ai.ai_feed
@@ -45,12 +44,10 @@ def fetch_items():
     for row in rows:
         it = dict(zip(cols, row))
 
-        # published_at может быть datetime -> ISO строка
         pa = it.get("published_at")
         if hasattr(pa, "isoformat"):
             it["published_at"] = pa.isoformat()
 
-        # metrics может прийти как dict/None
         if it.get("metrics") is None:
             it["metrics"] = {}
 
@@ -99,16 +96,15 @@ def build_prompt(items):
 
     return (
         "Ты аналитик GeoFAQ Digest.\n"
-        "Твоя задача: по списку материалов за сутки сделать:\n"
-        "1) 5 тем дня (top_topics)\n"
+        "На основе списка материалов за сутки сделай:\n"
+        "1) 5 тем дня (top_topics) — ровно 5\n"
         "2) что растёт (what_is_growing)\n"
         "3) идеи для GeoFAQ (geofaq_ideas)\n"
         "4) короткий дайджест (digest)\n\n"
         "ВАЖНО:\n"
-        "- НЕЛЬЗЯ выдумывать источники. Каждая тема/сигнал должны ссылаться на входные items.\n"
+        "- НЕЛЬЗЯ выдумывать источники. Каждый пункт должен ссылаться на входные items.\n"
         "- Возвращай ТОЛЬКО валидный JSON. Без markdown. Без ```.\n"
-        "- top_topics ровно 5.\n"
-        "- confidence 0..1.\n\n"
+        "- confidence в диапазоне 0..1.\n\n"
         f"Схема результата (пример структуры):\n{json.dumps(schema_hint, ensure_ascii=False)}\n\n"
         f"Сегодняшняя дата (UTC): {datetime.now(timezone.utc).date().isoformat()}\n\n"
         "Вот данные items:\n"
@@ -124,11 +120,8 @@ def _strip_code_fences(s: str) -> str:
 
 
 def _repair_json(bad_text: str) -> dict:
-    """
-    Если модель вернула почти-JSON, просим модель починить.
-    """
     repair_prompt = (
-        "Исправь текст так, чтобы он стал ВАЛИДНЫМ JSON и СООТВЕТСТВОВАЛ схеме.\n"
+        "Исправь текст так, чтобы он стал ВАЛИДНЫМ JSON и соответствовал схеме.\n"
         "Верни ТОЛЬКО JSON, без markdown.\n\n"
         f"Текст:\n{bad_text}"
     )
@@ -156,13 +149,11 @@ def analyze_with_ai(items):
         temperature=0.2,
     )
 
-    text = resp.choices[0].message.content
-    text = _strip_code_fences(text)
+    text = _strip_code_fences(resp.choices[0].message.content)
 
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Чиним через второй запрос
         return _repair_json(text)
 
 
@@ -186,35 +177,13 @@ def render_markdown(result: dict) -> str:
     return md
 
 
-def ensure_digest_runs_schema():
-    """
-    На случай если колонки ещё не добавлены.
-    Если у тебя уже миграция выполнена — ничего не сломает (IF NOT EXISTS).
-    """
-    ddl = """
-    alter table content_ai.digest_runs
-      add column if not exists run_date date default current_date,
-      add column if not exists window interval default interval '24 hours',
-      add column if not exists items_count int,
-      add column if not exists model text,
-      add column if not exists result_json jsonb,
-      add column if not exists digest_md text;
-    """
-    conn = psycopg2.connect(DB_URL)
-    cur = conn.cursor()
-    cur.execute(ddl)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
 def save_digest(result_json: dict, digest_md: str, items_count: int):
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
 
     insert_query = """
     insert into content_ai.digest_runs
-      (run_date, window, items_count, model, result_json, digest_md)
+      (run_date, time_window, items_count, model, result_json, digest_md)
     values
       (%s, interval '24 hours', %s, %s, %s, %s);
     """
@@ -243,10 +212,6 @@ def main():
     if not items:
         print("No items found in last 24h. Exiting.")
         return
-
-    # На всякий случай создаём колонки (не обязательно, но удобно)
-    print("Ensuring digest_runs schema...")
-    ensure_digest_runs_schema()
 
     print("Analyzing with AI...")
     result = analyze_with_ai(items)
