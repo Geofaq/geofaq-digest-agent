@@ -1,0 +1,52 @@
+name: GeoFAQ Daily Pipeline
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 01:00 UTC (зимой = 01:00 Лондон)
+  workflow_dispatch:
+
+jobs:
+  daily-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Collect Telegram posts
+        run: python scripts/collect_telegram.py
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Process raw posts
+        run: python scripts/process_raw.py
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Generate daily report
+        run: python scripts/generate_daily_report.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Commit report
+        run: |
+          git config --global user.name "GeoFAQ Bot"
+          git config --global user.email "bot@geofaq.ai"
+          git add reports/
+          git commit -m "Daily report auto-generated" || echo "No changes"
+          git push
