@@ -60,28 +60,14 @@ def fetch_items():
 
 
 def build_prompt(items):
-    # Явно фиксируем схему, чтобы digest был объектом, а не строкой
-    schema = {
-        "top_topics": "array(5)",
-        "what_is_growing": "array",
-        "geofaq_ideas": "array",
-        "digest": {
-            "title": "string",
-            "bullets": "array(string)",
-            "links": "array({title,url})"
-        }
-    }
-
     return (
         "Ты аналитик GeoFAQ.\n"
         "На основе списка материалов за сутки сформируй:\n"
-        "1) top_topics — РОВНО 5 тем дня\n"
-        "2) what_is_growing — сигналы роста/всплески\n"
-        "3) geofaq_ideas — идеи для контента GeoFAQ\n"
-        "4) digest — объект с title/bullets/links\n\n"
-        "Верни строго валидный JSON. Без markdown. Без ```.\n"
-        "digest ОБЯЗАТЕЛЬНО должен быть объектом, не строкой.\n\n"
-        f"Схема:\n{json.dumps(schema, ensure_ascii=False)}\n\n"
+        "1) top_topics (РОВНО 5)\n"
+        "2) what_is_growing\n"
+        "3) geofaq_ideas\n"
+        "4) digest — объект с title, bullets (список), links (список объектов)\n\n"
+        "Верни строго валидный JSON. Без markdown. Без ```.\n\n"
         f"Дата (UTC): {datetime.now(timezone.utc).date().isoformat()}\n\n"
         f"Items:\n{json.dumps(items, ensure_ascii=False, default=str)}"
     )
@@ -96,8 +82,8 @@ def clean_json(text: str) -> str:
 
 def repair_json(bad_text: str) -> dict:
     repair_prompt = (
-        "Исправь текст так, чтобы он стал валидным JSON и соответствовал схеме.\n"
-        "Верни только JSON, без markdown.\n\n"
+        "Исправь текст так, чтобы он стал валидным JSON. "
+        "Верни только JSON.\n\n"
         f"{bad_text}"
     )
 
@@ -129,36 +115,30 @@ def analyze_with_ai(items):
     text = clean_json(resp.choices[0].message.content)
 
     try:
-        data = json.loads(text)
+        return json.loads(text)
     except json.JSONDecodeError:
-        data = repair_json(text)
-
-    return data
+        return repair_json(text)
 
 
 def ensure_list(x):
-    """Нормализуем к list."""
     if x is None:
         return []
     if isinstance(x, list):
         return x
-    # если строка — сделаем список из одного пункта
     if isinstance(x, str):
         return [x.strip()] if x.strip() else []
     return []
 
 
 def render_markdown(result):
-    # result может быть dict, но делаем безопасно
     if not isinstance(result, dict):
-        return "# GeoFAQ Digest\n\n- (Ошибка формата результата: не dict)\n"
+        return "# GeoFAQ Digest\n\n- Ошибка формата результата\n"
 
     digest = result.get("digest", {})
 
-    # digest может быть строкой (как у тебя). Обрабатываем.
     if isinstance(digest, str):
         title = "GeoFAQ Digest"
-        bullets = [digest.strip()] if digest.strip() else []
+        bullets = [digest]
         links = []
     elif isinstance(digest, dict):
         title = digest.get("title") or "GeoFAQ Digest"
@@ -170,23 +150,23 @@ def render_markdown(result):
         links = []
 
     md = f"# {title}\n\n"
+
     if bullets:
         for b in bullets:
             md += f"- {b}\n"
     else:
         md += "- (Пустой дайджест)\n"
 
-    # links: ожидаем список dict({title,url}), но допускаем строки
     if links:
         md += "\n## Ссылки\n"
         for l in links:
             if isinstance(l, dict):
-                t = (l.get("title") or "link").strip()
-                u = (l.get("url") or "").strip()
+                t = l.get("title", "")
+                u = l.get("url", "")
                 if u:
                     md += f"- {t}: {u}\n"
-            elif isinstance(l, str) and l.strip():
-                md += f"- {l.strip()}\n"
+            elif isinstance(l, str):
+                md += f"- {l}\n"
 
     return md
 
@@ -205,7 +185,7 @@ def save_digest(result_json, digest_md, items_count):
     cur.execute(
         insert_query,
         (
-            "daily_ai",
+            "daily",          # допустимые: daily / weekly
             date.today(),
             items_count,
             MODEL,
