@@ -1,13 +1,74 @@
-name: Debug Structure
+name: GeoFAQ Daily Pipeline
 
 on:
+  schedule:
+    - cron: '0 1 * * *'   # 01:00 UTC
   workflow_dispatch:
 
 jobs:
-  debug:
+  daily-run:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
-      - run: |
-          pwd
-          ls -R
+      # 1️⃣ Забираем репозиторий
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Устанавливаем Python
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      # 3️⃣ Устанавливаем зависимости
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytz
+
+      # 4️⃣ Сбор Telegram
+      - name: Collect Telegram posts
+        run: python ./scripts/collect_telegram.py
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      # 5️⃣ AI-анализ
+      - name: Process raw posts
+        run: python ./scripts/process_raw.py
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      # 6️⃣ Генерация отчёта
+      - name: Generate daily report
+        run: python ./scripts/generate_daily_report.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      # 7️⃣ Отправка в Telegram
+      - name: Send report to Telegram
+        run: |
+          REPORT_FILE=$(ls reports/*_daily.md | tail -n 1)
+          python ./scripts/send_report_to_telegram.py
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
+          REPORT_CHANNEL: ${{ secrets.REPORT_CHANNEL }}
+          REPORT_FILE: reports/$(date -u +%Y-%m-%d)_daily.md
+
+      # 8️⃣ Коммит отчёта обратно в репозиторий
+      - name: Commit report
+        run: |
+          git config --global user.name "GeoFAQ Bot"
+          git config --global user.email "bot@geofaq.ai"
+          git add reports/
+          git commit -m "Daily report auto-generated" || echo "No changes"
+          git push
