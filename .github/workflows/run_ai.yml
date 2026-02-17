@@ -1,0 +1,30 @@
+name: Run AI Digest
+
+on:
+  workflow_dispatch:   # можно запускать вручную
+  schedule:
+    - cron: "0 21 * * *"   # каждый день в 21:00 UTC (можем изменить)
+
+jobs:
+  run-ai:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install openai psycopg2-binary python-dotenv
+
+      - name: Run AI processing
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          python scripts/process_ai.py
