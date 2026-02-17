@@ -13,13 +13,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DB_URL = os.getenv("SUPABASE_DB_URL")
 
 if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is missing (set it in .env locally or GitHub Secrets).")
+    raise RuntimeError("OPENAI_API_KEY is missing.")
 if not DB_URL:
-    raise RuntimeError("SUPABASE_DB_URL is missing (set it in .env locally or GitHub Secrets).")
+    raise RuntimeError("SUPABASE_DB_URL is missing.")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
 
 FETCH_QUERY = """
 select id, source, url, text, published_at, metrics
@@ -42,16 +43,15 @@ def fetch_items():
 
     items = []
     for row in rows:
-        it = dict(zip(cols, row))
+        item = dict(zip(cols, row))
 
-        pa = it.get("published_at")
-        if hasattr(pa, "isoformat"):
-            it["published_at"] = pa.isoformat()
+        if hasattr(item.get("published_at"), "isoformat"):
+            item["published_at"] = item["published_at"].isoformat()
 
-        if it.get("metrics") is None:
-            it["metrics"] = {}
+        if item.get("metrics") is None:
+            item["metrics"] = {}
 
-        items.append(it)
+        items.append(item)
 
     cur.close()
     conn.close()
@@ -59,82 +59,44 @@ def fetch_items():
 
 
 def build_prompt(items):
-    schema_hint = {
-        "date": "YYYY-MM-DD",
-        "top_topics": [
-            {
-                "title": "string",
-                "why_now": "string",
-                "sources": [{"source": "string", "url": "string", "id": "string"}],
-                "keywords": ["string"]
-            }
-        ],
-        "what_is_growing": [
-            {
-                "signal": "string",
-                "evidence": "string",
-                "sources": [{"source": "string", "url": "string", "id": "string"}],
-                "confidence": 0.0
-            }
-        ],
-        "geofaq_ideas": [
-            {
-                "idea": "string",
-                "format": "question_bank|theory_page|trainer_feature|seo_page|image_task",
-                "oge_link": "task_1..30|vpr|olymp|null",
-                "why_it_will_work": "string",
-                "first_step_tomorrow": "string",
-                "inputs_needed": ["string"]
-            }
-        ],
-        "digest": {
-            "title": "string",
-            "bullets": ["string"],
-            "links": [{"title": "string", "url": "string"}]
-        }
-    }
-
     return (
-        "Ты аналитик GeoFAQ Digest.\n"
-        "На основе списка материалов за сутки сделай:\n"
-        "1) 5 тем дня (top_topics) — ровно 5\n"
+        "Ты аналитик GeoFAQ.\n"
+        "На основе списка материалов за сутки сформируй:\n"
+        "1) 5 тем дня (top_topics)\n"
         "2) что растёт (what_is_growing)\n"
         "3) идеи для GeoFAQ (geofaq_ideas)\n"
         "4) короткий дайджест (digest)\n\n"
-        "ВАЖНО:\n"
-        "- НЕЛЬЗЯ выдумывать источники. Каждый пункт должен ссылаться на входные items.\n"
-        "- Возвращай ТОЛЬКО валидный JSON. Без markdown. Без ```.\n"
-        "- confidence в диапазоне 0..1.\n\n"
-        f"Схема результата (пример структуры):\n{json.dumps(schema_hint, ensure_ascii=False)}\n\n"
-        f"Сегодняшняя дата (UTC): {datetime.now(timezone.utc).date().isoformat()}\n\n"
-        "Вот данные items:\n"
-        f"{json.dumps(items, ensure_ascii=False, default=str)}"
+        "Верни строго валидный JSON. Без markdown.\n\n"
+        f"Дата: {datetime.now(timezone.utc).date().isoformat()}\n\n"
+        f"Items:\n{json.dumps(items, ensure_ascii=False, default=str)}"
     )
 
 
-def _strip_code_fences(s: str) -> str:
-    s = s.strip()
-    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s*```$", "", s)
-    return s.strip()
+def clean_json(text):
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?", "", text)
+    text = re.sub(r"```$", "", text)
+    return text.strip()
 
 
-def _repair_json(bad_text: str) -> dict:
+def repair_json(bad_text):
     repair_prompt = (
-        "Исправь текст так, чтобы он стал ВАЛИДНЫМ JSON и соответствовал схеме.\n"
-        "Верни ТОЛЬКО JSON, без markdown.\n\n"
-        f"Текст:\n{bad_text}"
+        "Исправь текст так, чтобы он стал валидным JSON. "
+        "Верни только JSON.\n\n"
+        f"{bad_text}"
     )
+
     resp = client.chat.completions.create(
         model=MODEL,
         messages=[
-            {"role": "system", "content": "Return ONLY valid JSON. No markdown."},
+            {"role": "system", "content": "Return ONLY valid JSON."},
             {"role": "user", "content": repair_prompt},
         ],
         temperature=0.0,
     )
-    text = _strip_code_fences(resp.choices[0].message.content)
-    return json.loads(text)
+
+    fixed = clean_json(resp.choices[0].message.content)
+    return json.loads(fixed)
 
 
 def analyze_with_ai(items):
@@ -143,27 +105,28 @@ def analyze_with_ai(items):
     resp = client.chat.completions.create(
         model=MODEL,
         messages=[
-            {"role": "system", "content": "Return ONLY valid JSON. No markdown, no code fences."},
+            {"role": "system", "content": "Return ONLY valid JSON. No markdown."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
     )
 
-    text = _strip_code_fences(resp.choices[0].message.content)
+    text = clean_json(resp.choices[0].message.content)
 
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        return _repair_json(text)
+        return repair_json(text)
 
 
-def render_markdown(result: dict) -> str:
+def render_markdown(result):
     digest = result.get("digest", {})
-    title = digest.get("title") or "GeoFAQ Digest"
-    bullets = digest.get("bullets") or []
-    links = digest.get("links") or []
+    title = digest.get("title", "GeoFAQ Digest")
+    bullets = digest.get("bullets", [])
+    links = digest.get("links", [])
 
     md = f"# {title}\n\n"
+
     for b in bullets:
         md += f"- {b}\n"
 
@@ -171,26 +134,26 @@ def render_markdown(result: dict) -> str:
         md += "\n## Ссылки\n"
         for l in links:
             if isinstance(l, dict):
-                md += f"- {l.get('title','link')}: {l.get('url','')}\n"
-            else:
-                md += f"- {l}\n"
+                md += f"- {l.get('title','')}: {l.get('url','')}\n"
+
     return md
 
 
-def save_digest(result_json: dict, digest_md: str, items_count: int):
+def save_digest(result_json, digest_md, items_count):
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
 
     insert_query = """
     insert into content_ai.digest_runs
-      (run_date, time_window, items_count, model, result_json, digest_md)
+      (kind, run_date, time_window, items_count, model, result_json, digest_md)
     values
-      (%s, interval '24 hours', %s, %s, %s, %s);
+      (%s, %s, interval '24 hours', %s, %s, %s, %s);
     """
 
     cur.execute(
         insert_query,
         (
+            "daily_ai",
             date.today(),
             items_count,
             MODEL,
@@ -210,7 +173,7 @@ def main():
     print(f"Fetched {len(items)} items")
 
     if not items:
-        print("No items found in last 24h. Exiting.")
+        print("No items found.")
         return
 
     print("Analyzing with AI...")
