@@ -32,7 +32,16 @@ async def main():
         for channel in CHANNELS:
             print(f"\n--- {channel} ---")
 
-            async for msg in client.iter_messages(channel, limit=10):
+           from datetime import datetime, timezone
+
+DATE_FROM = datetime(2026, 2, 1, tzinfo=timezone.utc)
+
+async for msg in client.iter_messages(channel):
+    if not msg.message:
+        continue
+
+    if msg.date < DATE_FROM:
+        break
                 if not msg.message:
                     continue
 
